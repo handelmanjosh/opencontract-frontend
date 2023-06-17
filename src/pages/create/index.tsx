@@ -1,5 +1,8 @@
+import { useWallet } from '@solana/wallet-adapter-react';
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
+import { receiveSol } from '../../components/utils/sol';
+import { receiveTokens } from '../../components/utils/token';
 
 const WalletDisconnectButtonDynamic = dynamic(
     async () => (await import('@solana/wallet-adapter-react-ui')).WalletDisconnectButton,
@@ -9,7 +12,7 @@ const WalletMultiButtonDynamic = dynamic(
     async () => (await import('@solana/wallet-adapter-react-ui')).WalletMultiButton,
     { ssr: false }
 );
-const availableTypes = ["Value", "Movement"];
+const availableTypes = ["Value", "Movement", "Bounty"];
 export default function Create() {
     const [selectedType, setSelectedType] = useState<string>(availableTypes[0]);
     const [toAccount, setToAccount] = useState<string>("");
@@ -22,46 +25,65 @@ export default function Create() {
     const [negative, setNegative] = useState<boolean>(false);
     const [isRewardSol, setIsRewardSol] = useState<boolean>(false);
     const [sendingContract, setSendingContract] = useState<boolean>(false); // do not include in post request
-    const [sendContract, setSendContract] = useState<() => any>(() => null);
+    const [isPublic, setIsPublic] = useState<boolean>(false);
+    const [numberOfContracts, setNumberOfContracts] = useState<string>("");
+    const { publicKey, signTransaction } = useWallet();
 
     useEffect(() => {
-        const submitContract = () => {
-            setSendingContract(true);
-            fetch("http://localhost:3005/create",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        type: selectedType,
-                        toAccount,
-                        fromAccount,
-                        tokenAddress,
-                        amount,
-                        reward,
-                        rewardTokenAddress,
-                        isRewardSol,
-                        isSol,
-                        negative,
-                        time: 60 * 60 * 24 * 7 // not really one week, but close enough. One week of seconds worth of steps on the backend
-                    }),
-                    headers: { "Content-Type": "application/json" }
-                }
-            ).then(response => {
-                setSendingContract(false);
-                if (response.status == 200) {
-                    response.json().then(data => {
-                        console.log(data);
-                    });
-                    resetAllState();
-                } else {
-                    console.error("Error creating contract");
-                }
-            }).catch(err => {
-                setSendingContract(false);
-                console.error(err);
-            });
-        };
-        setSendContract(submitContract);
-    }, [toAccount, fromAccount, selectedType, tokenAddress, amount, reward, rewardTokenAddress, isSol, negative, isRewardSol]);
+        resetAllState();
+    }, [selectedType]);
+    const submitContract = async () => {
+        if (!publicKey || !signTransaction) return;
+        if (!Number(amount) || !Number(reward)) return;
+
+        let payReward = Number(reward);
+        if (numberOfContracts !== "") {
+            payReward *= Number(numberOfContracts);
+        }
+        if (isSol) {
+            await receiveSol(publicKey.toBase58(), Number(payReward), signTransaction);
+        } else {
+            await receiveTokens(rewardTokenAddress, publicKey.toBase58(), Number(payReward), signTransaction);
+        }
+
+        setSendingContract(true);
+        console.log("sending contract");
+
+        fetch("http://localhost:3005/create",
+            {
+                method: "POST",
+                body: JSON.stringify({
+                    type: selectedType,
+                    toAccount,
+                    fromAccount,
+                    tokenAddress,
+                    amount,
+                    reward,
+                    rewardTokenAddress,
+                    isRewardSol,
+                    isSol,
+                    negative,
+                    isPublic,
+                    numberOfContracts,
+                    time: 7 // whatever
+                }),
+                headers: { "Content-Type": "application/json" }
+            }
+        ).then(response => {
+            setSendingContract(false);
+            if (response.status == 200) {
+                response.json().then(data => {
+                    console.log(data);
+                });
+                resetAllState();
+            } else {
+                console.error("Error creating contract");
+            }
+        }).catch(err => {
+            setSendingContract(false);
+            console.error(err);
+        });
+    };
     const resetAllState = () => {
         setToAccount("");
         setFromAccount("");
@@ -72,6 +94,7 @@ export default function Create() {
         setIsSol(false);
         setNegative(false);
         setIsRewardSol(false);
+        setNumberOfContracts("");
     };
 
     return (
@@ -157,12 +180,17 @@ export default function Create() {
                                                 text="Reward is in SOL"
                                                 onChange={(event: React.ChangeEvent<HTMLInputElement>) => setIsRewardSol(!isRewardSol)}
                                             />
+                                            <SolCheckBox
+                                                checked={isRewardSol}
+                                                text="Is contract public?"
+                                                onChange={(event: React.ChangeEvent<HTMLInputElement>) => setIsPublic(!isPublic)}
+                                            />
                                         </div>
                                     </Panel>
                                 </div>
                             </div>
                             <div className="flex flex-row justify-center items-center w-full">
-                                <StyledButton onClick={sendContract} />
+                                <StyledButton onClick={submitContract} />
                             </div>
                         </div>
                         :
@@ -239,11 +267,78 @@ export default function Create() {
                                     </div>
                                 </div>
                                 <div className="flex flex-row justify-center items-center w-full">
-                                    <StyledButton onClick={sendContract} />
+                                    <StyledButton onClick={submitContract} />
                                 </div>
                             </div>
-                            :
-                            <></>
+                            : selectedType == "Bounty" ?
+                                <div className="w-full h-full flex flex-col justify-center items-center p-4 gap-6">
+                                    <p className="text-center text-4xl">{"Create a public bounty"}</p>
+                                    <div className="flex flex-row flex-grow justify-center items-center w-full h-full gap-6">
+                                        <div className="w-[30%] h-full flex flex-col justify-center items-center">
+                                            <Panel>
+                                                <div className="flex flex-col justify-center items-center w-full h-full gap-4">
+                                                    <StyledInput
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setNumberOfContracts(event.target.value)}
+                                                        value={numberOfContracts}
+                                                        placeholder="Enter number of contracts"
+                                                        isError={false}
+                                                        label="Enter number of contracts"
+                                                    />
+                                                    <StyledInput
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setAmount(event.target.value)}
+                                                        value={amount}
+                                                        placeholder="Enter amount to track"
+                                                        isError={false}
+                                                        label="Enter amount to track"
+                                                    />
+                                                    <SolCheckBox
+                                                        checked={negative}
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setNegative(!negative)}
+                                                        text="Decrease in this amount?"
+                                                    />
+                                                    <StyledInput
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setReward(event.target.value)}
+                                                        value={reward}
+                                                        placeholder="Enter reward amount"
+                                                        isError={false}
+                                                        label="Enter reward amount"
+                                                    />
+                                                    <StyledInput
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setTokenAddress(event.target.value)}
+                                                        value={tokenAddress}
+                                                        placeholder="Enter target token address"
+                                                        isError={false}
+                                                        label="Enter target token address"
+                                                        deactivated={isSol}
+                                                    />
+                                                    <SolCheckBox
+                                                        checked={isSol}
+                                                        text="Target token is SOL"
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setIsSol(!isSol)}
+                                                    />
+                                                    <StyledInput
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setRewardTokenAddress(event.target.value)}
+                                                        value={rewardTokenAddress}
+                                                        placeholder="Enter reward token address"
+                                                        isError={false}
+                                                        deactivated={isRewardSol}
+                                                        label="Enter reward token address"
+                                                    />
+                                                    <SolCheckBox
+                                                        checked={isRewardSol}
+                                                        text="Reward is in SOL"
+                                                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setIsRewardSol(!isRewardSol)}
+                                                    />
+                                                </div>
+                                            </Panel>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-row justify-center items-center w-full">
+                                        <StyledButton onClick={submitContract} />
+                                    </div>
+                                </div>
+                                :
+                                <></>
                     }
                 </div>
             </div>
